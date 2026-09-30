@@ -43,6 +43,10 @@ namespace X11 {
 namespace {
 
 //------------------------------------------------------------------------
+int gFrameCount = 0;
+SharedPointer<IRunLoop> gFrameRunLoop;
+
+//------------------------------------------------------------------------
 inline void setupMouseEventButtons (MouseEvent& event, xcb_button_t value)
 {
 	switch (value)
@@ -643,13 +647,19 @@ Frame::Frame (IPlatformFrameCallback* frame, const CRect& size, uint32_t parent,
 	auto cfg = dynamic_cast<FrameConfig*> (config);
 	if (cfg && cfg->runLoop)
 	{
-		RunLoop::init ();
 		if (auto f = getPlatformFactory ().asLinuxFactory ())
 		{
 			if (f->getRunLoop () == nullptr)
+			{
 				f->setRunLoop (cfg->runLoop);
+				gFrameRunLoop = cfg->runLoop;
+			}
 		}
+		// The run loop has to be installed before init, which registers the
+		// xcb connection with it.
+		RunLoop::init ();
 	}
+	++gFrameCount;
 
 	impl = std::unique_ptr<Impl> (new Impl (parent, {size.getWidth (), size.getHeight ()}, frame));
 
@@ -661,6 +671,21 @@ Frame::~Frame ()
 {
 	impl.reset ();
 	RunLoop::exit ();
+
+	// A run loop taken from a frame config belongs to the host window that
+	// config was made for. Once the last frame is gone that window may be too,
+	// so drop it instead of keeping a dangling host pointer for the next editor
+	// or for module unload. A run loop the host installed another way (host
+	// context) is left alone.
+	if (--gFrameCount == 0 && gFrameRunLoop)
+	{
+		if (auto f = getPlatformFactory ().asLinuxFactory ())
+		{
+			if (f->getRunLoop () == gFrameRunLoop)
+				f->setRunLoop (nullptr);
+		}
+		gFrameRunLoop = nullptr;
+	}
 }
 
 //------------------------------------------------------------------------

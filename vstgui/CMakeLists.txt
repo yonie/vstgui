@@ -75,7 +75,9 @@ if(LINUX)
         ${FREETYPE_LIBRARIES}
         ${LIBXCB_LIBRARIES}
         ${LIBXCB_UTIL_LIBRARIES}
-        ${LIBXCB_CURSOR_LIBRARIES}
+        # libxcb-cursor is NOT linked: x11platform.cpp loads it at run time,
+        # so a system without it still loads the plug-in (WetReducer#1)
+        ${CMAKE_DL_LIBS}
         ${LIBXCB_KEYSYMS_LIBRARIES}
         ${LIBXCB_XKB_LIBRARIES}
         ${LIBXKB_COMMON_LIBRARIES}

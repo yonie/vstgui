@@ -43,6 +43,42 @@ namespace X11 {
 //------------------------------------------------------------------------
 namespace {
 
+//------------------------------------------------------------------------
+// libxcb-cursor, loaded at run time instead of linked.
+//
+// It is only used to pick the mouse pointer's shape, but linking it made it a
+// hard dependency of every plug-in: a fresh Linux Mint (Cinnamon, which has no
+// Qt 6 to pull the library in) does not ship it, and the host could not load
+// the plug-in at all. Loaded here, a system without it simply keeps the
+// default pointer.
+struct XcbCursorLib
+{
+	decltype (&xcb_cursor_context_new) contextNew {nullptr};
+	decltype (&xcb_cursor_load_cursor) loadCursor {nullptr};
+	decltype (&xcb_cursor_context_free) contextFree {nullptr};
+
+	static const XcbCursorLib& get ()
+	{
+		static const XcbCursorLib lib;
+		return lib;
+	}
+	bool ok () const { return contextNew && loadCursor && contextFree; }
+
+private:
+	XcbCursorLib ()
+	{
+		void* handle = dlopen ("libxcb-cursor.so.0", RTLD_LAZY | RTLD_LOCAL);
+		if (!handle)
+			return;
+		contextNew = reinterpret_cast<decltype (contextNew)> (dlsym (handle, "xcb_cursor_context_new"));
+		loadCursor = reinterpret_cast<decltype (loadCursor)> (dlsym (handle, "xcb_cursor_load_cursor"));
+		contextFree =
+			reinterpret_cast<decltype (contextFree)> (dlsym (handle, "xcb_cursor_context_free"));
+		// the handle stays open for the life of the process, as a linked
+		// library would
+	}
+};
+
 using VirtMap = std::unordered_map<xkb_keysym_t, VirtualKey>;
 const VirtMap keyMap = {{XKB_KEY_BackSpace, VirtualKey::Back},
 						{XKB_KEY_Tab, VirtualKey::Tab},
@@ -130,7 +166,8 @@ struct RunLoop::Impl : IEventHandler
 		xcbConnection = xcb_connect (nullptr, &screenNo);
 		RunLoop::get ()->registerEventHandler (xcb_get_file_descriptor (xcbConnection), this);
 		auto screen = xcb_aux_get_screen (xcbConnection, screenNo);
-		xcb_cursor_context_new (xcbConnection, screen, &cursorContext);
+		if (XcbCursorLib::get ().ok ())
+			XcbCursorLib::get ().contextNew (xcbConnection, screen, &cursorContext);
 
 		xcb_xkb_use_extension (xcbConnection, XKB_X11_MIN_MAJOR_XKB_VERSION,
 							   XKB_X11_MIN_MINOR_XKB_VERSION);
@@ -182,7 +219,7 @@ struct RunLoop::Impl : IEventHandler
 					if (c != XCB_CURSOR_NONE)
 						xcb_free_cursor (xcbConnection, c);
 				}
-				xcb_cursor_context_free (cursorContext);
+				XcbCursorLib::get ().contextFree (cursorContext);
 			}
 
 			xcb_disconnect (xcbConnection);
@@ -435,7 +472,7 @@ uint32_t makeCursor (xcb_cursor_context_t* context, const T& names)
 {
 	for (auto& name : names)
 	{
-		auto result = xcb_cursor_load_cursor (context, name);
+		auto result = XcbCursorLib::get ().loadCursor (context, name);
 		if (result != XCB_CURSOR_NONE)
 			return result;
 	}
